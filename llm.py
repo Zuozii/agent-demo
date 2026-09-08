@@ -52,7 +52,6 @@ def chat(messages, tools=None):
         raise RuntimeError("请先在 .env 中填入 LLM_API_KEY（或先运行：py agent.py --mock）")
 
     # 组装请求体：model + 对话记录 + 工具清单，这就是发给模型的全部内容
-    # 组装请求体：model + 对话记录 + 工具清单，这就是发给模型的全部内容
     # ⚠️ 血泪教训：2026-09-07 重构时曾弄丢"if tools: payload[...]"两行，
     # 模型收不到工具菜单 → 幻觉时间、把工具名当纯文本输出（DSML泄漏）。
     # 当时误判为 temperature 的锅，靠"逐字节对比"才定位真凶。
