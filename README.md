@@ -1,5 +1,6 @@
 # 迷你 Agent（agent-demo）
 
+我的第一个agent项目
 一个**零第三方依赖**的 Python 迷你 Agent，不到 200 行代码，但包含真实 Agent 的全部核心部件：
 
 - 调用真实大模型 API（OpenAI 兼容格式，DeepSeek / 通义 / 各类中转站都能用）
