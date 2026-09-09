@@ -92,6 +92,12 @@ def save_memory():
         json.dump(memory, f, ensure_ascii=False, indent=2)
 
 
+# ── 第8课新增：流式直播员 ──
+def show(fragment):
+    """模型每吐一个文字碎片，就立刻打印（不换行、强制刷新缓冲区）。"""
+    print(fragment, end="", flush=True)
+
+
 def run_agent(user_input, use_mock=False):
     """Agent 主循环：模型思考 -> 点名工具 -> 程序执行 -> 结果回传 -> 再思考 ……"""
     if use_mock:
@@ -106,7 +112,7 @@ def run_agent(user_input, use_mock=False):
 
     for step in range(1, MAX_STEPS + 1):
         print(f"\n── 第 {step} 步：等待模型思考（当前记忆 {len(messages)} 条）──")
-        message = llm.chat(messages, tools=TOOLS)
+        message = llm.chat(messages, tools=TOOLS, on_text=show)
         # 部分模型（如 DeepSeek）会附带 reasoning_content（思考过程）字段，
         # 这个字段只许"出"不许"进"，回传给 API 会被拒绝 —— 剥掉再入列
         message.pop("reasoning_content", None)
@@ -116,7 +122,10 @@ def run_agent(user_input, use_mock=False):
         if not tool_calls:
             # 模型没有点名任何工具 -> 这是最终答案，循环结束
             answer = message.get("content") or ""
-            print(f"\n【最终回答】{answer}")
+            if use_mock:
+                print(f"\n【最终回答】{answer}")  # Mock 不支持流式，整段打印
+            else:
+                print()  # 真实模式的文字刚才已经"边生成边直播"了，这里只补个换行
             return answer
 
         # 模型点名了工具 -> 由【我们的程序】执行（模型自己不会执行，它只会"提请求"！）

@@ -37,8 +37,13 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0"
 MAX_RETRIES = 3
 
 
-def chat(messages, tools=None):
+def chat(messages, tools=None, on_text=None):
     """发送一轮对话，返回模型回复的那条消息（dict）。
+
+    第8课新增：on_text 是可选的"直播解说员"——传一个函数进来，
+    模型每吐出一段文字碎片就立刻调用它一次 on_text(碎片)，
+    实现"打字机"效果。（函数名不加括号直接当参数传——第1课知识点回收！）
+    返回值与非流式版本完全一致：上层代码毫无感知。
 
     messages: 到目前为止的完整对话记录，是一个 list，每条消息是 dict
     tools:    可用工具的说明书列表（OpenAI tools 格式），可以是 None
@@ -56,7 +61,9 @@ def chat(messages, tools=None):
     # 模型收不到工具菜单 → 幻觉时间、把工具名当纯文本输出（DSML泄漏）。
     # 当时误判为 temperature 的锅，靠"逐字节对比"才定位真凶。
     # 教训一：重构后必须全功能验收；教训二：疑难杂症先 diff 实际发出的字节。
-    payload = {"model": MODEL, "messages": messages}
+    # 🌊 第8课新增："stream": true —— 服务器不再攒一个完整回答再回，
+    #    而是每生成几个字就立刻推一小块过来（SSE 事件流）。
+    payload = {"model": MODEL, "messages": messages, "stream": True}
     if tools:
         payload["tools"] = tools
 
@@ -82,9 +89,61 @@ def chat(messages, tools=None):
 
         try:
             with opener.open(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            # 返回模型的那条消息，要么 content（文字回答），要么 tool_calls（点名工具）
-            return data["choices"][0]["message"]
+                # 🌊 流式接收：resp 现在是个"水龙头"，for 循环每转一圈
+                # 就有一行新数据到达（而不是等全部攒完）。
+                # SSE 格式：每条消息是一行 "data: {json}"，空行分隔，[DONE] 收尾
+                content_parts = []  # 文字碎片收集箱，最后拼成完整回答
+                tool_map = {}       # 工具点名拼图板：{序号: {id, name, arguments}}
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue    # 空行、注释行，统统跳过
+                    body = line[5:].strip()
+                    if body == "[DONE]":
+                        break       # OpenAI 惯例：流结束的哨兵
+                    chunk = json.loads(body)
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+
+                    # ① 文字碎片：边收边直播（打字机效果就在这两行）
+                    frag = delta.get("content")
+                    if frag:
+                        content_parts.append(frag)
+                        if on_text:
+                            on_text(frag)
+
+                    # ② 工具点名碎片：模型会把工具名、参数拆成好几段分批发，
+                    #    必须按序号拼回去（详见下方 tool_map 的拼图板）
+                    for tc in delta.get("tool_calls") or []:
+                        slot = tool_map.setdefault(
+                            tc.get("index", 0),
+                            {"id": "", "name": "", "arguments": ""},
+                        )
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["arguments"] += fn["arguments"]
+
+                # 拼装成与非流式**一模一样**的消息结构——上层代码毫无感知
+                message = {"role": "assistant", "content": "".join(content_parts) or None}
+                if tool_map:
+                    message["tool_calls"] = [
+                        {
+                            "id": tool_map[i]["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tool_map[i]["name"],
+                                "arguments": tool_map[i]["arguments"],
+                            },
+                        }
+                        for i in sorted(tool_map)
+                    ]
+                return message
         except urllib.error.HTTPError as e:
             # 服务器明确拒绝（Key 错、模型名错等）——重试没有意义，直接把原因抛出来
             body = e.read().decode("utf-8", errors="replace")
